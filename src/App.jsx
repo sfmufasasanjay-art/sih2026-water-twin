@@ -1,352 +1,377 @@
-import React, { useState, useEffect } from 'react';
-import { Activity, Droplets, Settings, AlertTriangle, CheckCircle, Power, BarChart3, SlidersHorizontal, Info, Menu, Bell, Search, LayoutDashboard, Cpu, X, Play, Square } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Activity, Droplets, AlertTriangle, CheckCircle, Power, SlidersHorizontal, Info, Play, Square, FastForward, ShieldCheck, List, Cpu, Settings } from 'lucide-react';
 import WaterTreatmentSimulation from './components/WaterTreatmentSimulation';
 
 const MODULE_SPECS = {
-  sediment: { title: 'Sedimentation Tank', purpose: 'Removes large suspended solids, sand, and turbidity from raw water.', spec: 'Flow Rate: 50L/m | Media: Silica Sand / Gravel | Pressure drop: 0.2 bar' },
-  carbon: { title: 'Activated Carbon Adsorption', purpose: 'Removes chlorine, organic compounds, and unwanted odor/taste.', spec: 'Media: Granular Activated Carbon (GAC) | Contact time: 10 mins' },
-  membrane: { title: 'Reverse Osmosis (RO) Membrane', purpose: 'Forces water through a semi-permeable membrane to remove dissolved solids (TDS) and heavy metals.', spec: 'Type: Thin-film composite (TFC) | Rejection rate: 99.2% | Pressure: 15 bar' },
-  phCorrection: { title: 'Chemical Dosing Unit', purpose: 'Neutralizes pH to acceptable drinking water levels (6.5 - 8.5) by injecting safe chemicals.', spec: 'Dosing Pump: Diaphragm | Reagent: NaOH / HCl based on required shift' },
-  disinfection: { title: 'UV Disinfection', purpose: 'Inactivates bacteria, viruses, and pathogens using ultraviolet light.', spec: 'Wavelength: 254 nm | Dose: 40 mJ/cm² | Bulb Life: 9,000 hrs' },
-  s1: { title: 'Influent Sensor Array', purpose: 'Monitors raw water quality in real-time to feed data to the Edge Decision Engine.', spec: 'Sensors: pH, TDS (Conductivity), Turbidity (NTU), Temperature' },
-  s2: { title: 'Effluent Verification Sensor', purpose: 'Post-treatment verification. If water fails, triggers diversion valve.', spec: 'Sensors: pH, TDS, Flow Rate | Auto-divert response time: < 200ms' }
+  sediment: { title: 'Sedimentation Tank', purpose: 'Removes large suspended solids, sand, and turbidity from raw water.', spec: 'Flow Rate: 50L/m | Media: Silica Sand / Gravel' },
+  carbon: { title: 'Activated Carbon', purpose: 'Removes chlorine, organic compounds, and unwanted odor/taste.', spec: 'Media: Granular Activated Carbon (GAC)' },
+  membrane: { title: 'Reverse Osmosis', purpose: 'Forces water through a semi-permeable membrane to remove dissolved solids (TDS).', spec: 'Rejection rate: 99.2% | Pressure: 15 bar' },
+  phCorrection: { title: 'Chemical Dosing Unit', purpose: 'Neutralizes pH to acceptable drinking water levels (6.5 - 8.5).', spec: 'Dosing Pump: Diaphragm | Reagent: NaOH/HCl' },
+  disinfection: { title: 'UV Disinfection', purpose: 'Inactivates pathogens using ultraviolet light.', spec: 'Wavelength: 254 nm | Dose: 40 mJ/cm²' },
 };
 
 function App() {
-  const [sensors, setSensors] = useState({
-    pH: 7.2,
-    tds: 350,
-    turbidity: 8,
-    temp: 24.5
-  });
-
-  const [activeModules, setActiveModules] = useState({
-    sediment: false,
-    carbon: false,
-    membrane: false,
-    phCorrection: false,
-    disinfection: true
-  });
-
-  const [systemStatus, setSystemStatus] = useState('Idle');
-  const [outputStatus, setOutputStatus] = useState('Acceptable');
+  const [sensors, setSensors] = useState({ pH: 7.2, tds: 350, turbidity: 5, temp: 24.5 });
+  const [sensor2, setSensor2] = useState({ pH: 7.2, tds: 340, turbidity: 2, temp: 24.5 });
+  const [activeModules, setActiveModules] = useState({ sediment: false, carbon: false, membrane: false, phCorrection: false, disinfection: true });
+  
+  const [verificationStatus, setVerificationStatus] = useState('ACCEPT'); // ACCEPT, RE-TREAT, DIVERT
   const [flowRate, setFlowRate] = useState(0);
   const [selectedModule, setSelectedModule] = useState(null);
-  
-  // New State for Simulation
   const [isSimulating, setIsSimulating] = useState(false);
+  const [decisionLog, setDecisionLog] = useState([]);
+  const [activeScenarioName, setActiveScenarioName] = useState('MANUAL MODE');
+  
+  const [isAutoDemo, setIsAutoDemo] = useState(false);
+  const [autoDemoStep, setAutoDemoStep] = useState(0);
+  const autoDemoTimer = useRef(null);
+
+  const addLog = (msg) => {
+    const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute:'2-digit', second:'2-digit' });
+    setDecisionLog(prev => [{ time, msg, id: Math.random() }, ...prev].slice(0, 15));
+  };
+
+  const runScenario = (name) => {
+    setActiveScenarioName(name);
+    setIsSimulating(true);
+    addLog(`--- SCENARIO: ${name.toUpperCase()} ---`);
+    
+    let s1 = { ...sensors };
+    let s2 = { ...sensor2 };
+    let vStatus = 'ACCEPT';
+    
+    if (name === 'Normal Water') {
+      s1 = { pH: 7.2, tds: 350, turbidity: 5, temp: 24.5 };
+      s2 = { pH: 7.2, tds: 340, turbidity: 2, temp: 24.5 };
+      vStatus = 'ACCEPT';
+      addLog('Sensor 1 -> Water parameters NORMAL');
+    } else if (name === 'High Turbidity') {
+      s1 = { pH: 7.2, tds: 350, turbidity: 64, temp: 24.5 };
+      s2 = { pH: 7.2, tds: 340, turbidity: 3, temp: 24.5 };
+      vStatus = 'ACCEPT';
+      addLog('Sensor 1 -> Turbidity HIGH (64 NTU)');
+      addLog('ESP32 -> Sedimentation ACTIVATED');
+    } else if (name === 'High TDS') {
+      s1 = { pH: 7.2, tds: 800, turbidity: 5, temp: 24.5 };
+      s2 = { pH: 7.1, tds: 150, turbidity: 2, temp: 24.5 };
+      vStatus = 'ACCEPT';
+      addLog('Sensor 1 -> TDS HIGH (800 ppm)');
+      addLog('ESP32 -> RO Membrane ACTIVATED');
+    } else if (name === 'Multiple Abnormal') {
+      s1 = { pH: 5.5, tds: 800, turbidity: 64, temp: 24.5 };
+      s2 = { pH: 7.2, tds: 150, turbidity: 3, temp: 24.5 };
+      vStatus = 'ACCEPT';
+      addLog('Sensor 1 -> MULTIPLE ABNORMALITIES');
+      addLog('ESP32 -> Multi-stage routing ACTIVATED');
+    } else if (name === 'Abnormal pH') {
+      s1 = { pH: 5.5, tds: 350, turbidity: 5, temp: 24.5 };
+      s2 = { pH: 7.1, tds: 350, turbidity: 2, temp: 24.5 };
+      vStatus = 'ACCEPT';
+      addLog('Sensor 1 -> pH LOW (5.5)');
+      addLog('ESP32 -> pH Correction ACTIVATED');
+    } else if (name === 'Post-Treatment Failure (Re-treat)') {
+      s1 = { pH: 7.2, tds: 350, turbidity: 5, temp: 24.5 };
+      s2 = { pH: 7.2, tds: 350, turbidity: 15, temp: 24.5 }; 
+      vStatus = 'RE-TREAT';
+      addLog('Sensor 2 -> Verification FAILED (Turbidity > 10)');
+      addLog('ESP32 -> Initiating RE-TREATMENT LOOP');
+    } else if (name === 'Second Verification Failure (Divert)') {
+      s1 = { pH: 7.2, tds: 350, turbidity: 5, temp: 24.5 };
+      s2 = { pH: 7.2, tds: 350, turbidity: 18, temp: 24.5 }; 
+      vStatus = 'DIVERT';
+      addLog('Sensor 2 -> Verification FAILED AGAIN');
+      addLog('ESP32 -> DIVERTING TO REJECT TANK');
+      addLog('SYSTEM -> DO NOT RELEASE');
+    }
+
+    setSensors(s1);
+    setSensor2(s2);
+    setVerificationStatus(vStatus);
+  };
 
   useEffect(() => {
-    let modules = {
-      sediment: false,
-      carbon: false,
-      membrane: false,
-      phCorrection: false,
-      disinfection: true
-    };
-
-    let status = isSimulating ? 'Active' : 'Idle';
-
+    let modules = { sediment: false, carbon: false, membrane: false, phCorrection: false, disinfection: true };
+    
     if (sensors.turbidity > 10) modules.sediment = true;
-    if (sensors.tds > 500) {
-      modules.membrane = true;
-      modules.carbon = true;
-    }
+    if (sensors.tds > 500) { modules.membrane = true; modules.carbon = true; }
     if (sensors.pH < 6.5 || sensors.pH > 8.5) modules.phCorrection = true;
-
-    setActiveModules(modules);
-
-    if (modules.membrane && sensors.tds > 2000) {
-       setOutputStatus('Non-Compliant: Re-treat');
-       if (isSimulating) status = 'Warning';
-    } else if (modules.phCorrection && (sensors.pH < 5 || sensors.pH > 10)) {
-       setOutputStatus('Critical: Divert');
-       if (isSimulating) status = 'Critical';
-    } else {
-       setOutputStatus('Acceptable');
+    
+    if (verificationStatus === 'RE-TREAT' || verificationStatus === 'DIVERT') {
+       modules.sediment = true;
     }
-
-    setSystemStatus(status);
+    
+    setActiveModules(modules);
     
     if (isSimulating) {
       setFlowRate(120);
-      const interval = setInterval(() => {
-          setFlowRate(prev => Math.max(0, 120 + (Math.random() * 4 - 2)));
-      }, 2000);
+      const interval = setInterval(() => { setFlowRate(prev => Math.max(0, 120 + (Math.random() * 4 - 2))); }, 2000);
       return () => clearInterval(interval);
     } else {
       setFlowRate(0);
     }
-  }, [sensors, isSimulating]);
+  }, [sensors, isSimulating, verificationStatus]);
+
+  const DEMO_STEPS = [
+    'Normal Water', 'High Turbidity', 'High TDS', 'Multiple Abnormal', 
+    'Abnormal pH', 'Post-Treatment Failure (Re-treat)', 'Second Verification Failure (Divert)'
+  ];
+
+  useEffect(() => {
+    if (isAutoDemo) {
+      runScenario(DEMO_STEPS[autoDemoStep]);
+      autoDemoTimer.current = setTimeout(() => {
+        setAutoDemoStep(prev => (prev + 1) % DEMO_STEPS.length);
+      }, 8000);
+    }
+    return () => clearTimeout(autoDemoTimer.current);
+  }, [isAutoDemo, autoDemoStep]);
 
   const handleSensorChange = (e) => {
+    setActiveScenarioName('MANUAL MODE');
     const { name, value } = e.target;
     setSensors(prev => ({ ...prev, [name]: parseFloat(value) }));
+    if (!isSimulating) setIsSimulating(true);
+  };
+
+  const getReasonForModule = (id) => {
+    if (id === 'sediment') return sensors.turbidity > 10 ? `Turbidity (${sensors.turbidity} NTU) > 10 NTU` : (verificationStatus !== 'ACCEPT' ? 'Re-treatment active' : 'N/A');
+    if (id === 'carbon' || id === 'membrane') return sensors.tds > 500 ? `TDS (${sensors.tds} ppm) > 500 ppm` : 'N/A';
+    if (id === 'phCorrection') return (sensors.pH < 6.5 || sensors.pH > 8.5) ? `pH (${sensors.pH}) outside 6.5-8.5` : 'N/A';
+    if (id === 'disinfection') return 'Always Active (Final Stage)';
+    return 'N/A';
   };
 
   return (
-    <div className="min-h-screen bg-[#0b1120] text-slate-300 flex font-sans selection:bg-blue-500/30 relative">
+    <div className="min-h-screen bg-[#020617] text-slate-300 font-sans selection:bg-blue-500/30 overflow-x-hidden">
       
-      {/* Sidebar Navigation */}
-      <aside className="w-64 bg-[#0f172a] border-r border-slate-800 flex flex-col hidden md:flex z-20 shadow-xl">
-        <div className="h-16 flex items-center px-6 border-b border-slate-800">
-          <Droplets className="text-blue-500 h-6 w-6 mr-3" />
-          <span className="text-slate-100 font-bold tracking-wider text-sm">AQUA-TWIN PRO</span>
+      <header className="h-16 bg-[#0f172a] border-b border-slate-800 flex items-center justify-between px-6 sticky top-0 z-50 shadow-md">
+        <div className="flex items-center gap-3">
+          <Droplets className="text-blue-500 h-6 w-6" />
+          <span className="text-slate-100 font-bold tracking-widest text-sm">AQUA-TWIN PRO</span>
         </div>
-        
-        <nav className="flex-1 py-6 px-3 space-y-1">
-          <NavItem icon={<LayoutDashboard size={18} />} label="Dashboard" active />
-          <NavItem icon={<Activity size={18} />} label="Live Analytics" />
-          <NavItem icon={<Cpu size={18} />} label="ESP32 Edge Config" />
-          <NavItem icon={<BarChart3 size={18} />} label="Compliance Reports" />
-          <NavItem icon={<Settings size={18} />} label="System Settings" />
-        </nav>
-        
-        <div className="p-4 border-t border-slate-800">
-          <div className="bg-[#1e293b] rounded-lg p-4 border border-slate-700">
-            <p className="text-xs text-slate-400 uppercase font-semibold tracking-wider mb-2">System Uptime</p>
-            <p className="text-lg text-slate-100 font-mono">99.98%</p>
-          </div>
+        <div className="flex gap-4">
+           <button onClick={() => { setIsAutoDemo(!isAutoDemo); if(!isAutoDemo) setAutoDemoStep(0); }} className={`flex items-center gap-2 px-4 py-2 rounded font-bold text-xs ${isAutoDemo ? 'bg-purple-500/20 text-purple-400 border border-purple-500' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
+              <FastForward size={14} /> {isAutoDemo ? 'STOP AUTO DEMO' : 'START AUTO DEMO'}
+           </button>
+           <button onClick={() => setIsSimulating(!isSimulating)} className={`flex items-center gap-2 px-4 py-2 rounded font-bold text-xs ${isSimulating ? 'bg-rose-500/20 text-rose-400 border border-rose-500' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500'}`}>
+              {isSimulating ? <><Square size={14}/> STOP PROCESS</> : <><Play size={14}/> START PROCESS</>}
+           </button>
         </div>
-      </aside>
+      </header>
 
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
-        
-        <header className="h-16 bg-[#0f172a]/80 backdrop-blur-md border-b border-slate-800 flex items-center justify-between px-6 sticky top-0 z-10">
-          <div className="flex items-center gap-4">
-            <button className="md:hidden text-slate-400 hover:text-white">
-              <Menu size={20} />
-            </button>
-            <h1 className="text-lg font-medium text-slate-100">Process Overview</h1>
-          </div>
+      <main className="p-6 max-w-[1920px] mx-auto">
+        <div className="flex flex-col xl:flex-row gap-6">
           
-          <div className="flex items-center gap-5">
-            <button 
-               onClick={() => setIsSimulating(!isSimulating)}
-               className={`flex items-center gap-2 px-4 py-2 rounded-md font-bold text-sm shadow-lg transition-all ${
-                 isSimulating 
-                   ? 'bg-rose-500/20 text-rose-400 border border-rose-500 hover:bg-rose-500/30' 
-                   : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500 hover:bg-emerald-500/30'
-               }`}
-            >
-               {isSimulating ? <><Square size={16} fill="currentColor"/> STOP PROCESS</> : <><Play size={16} fill="currentColor"/> START PROCESS</>}
-            </button>
-            
-            <div className="h-8 w-8 rounded-full bg-gradient-to-tr from-blue-600 to-cyan-400 p-[2px] ml-4">
-              <div className="h-full w-full rounded-full bg-[#0f172a] flex items-center justify-center text-xs font-bold text-white">OP</div>
-            </div>
-          </div>
-        </header>
-
-        <main className="flex-1 overflow-y-auto p-6 relative">
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-            <StatCard title="System Status" value={systemStatus} type={statusToColor(systemStatus)} icon={<Activity size={20} />} />
-            <StatCard title="Current Flow Rate" value={`${flowRate.toFixed(1)} L/m`} subtitle={isSimulating ? "Nominal" : "Zero Flow"} icon={<Droplets size={20} />} />
-            <StatCard title="Active Modules" value={Object.values(activeModules).filter(Boolean).length} subtitle="Out of 5 total" icon={<Cpu size={20} />} />
-            <StatCard title="Final Output Quality" value={outputStatus} type={outputToColor(outputStatus)} icon={<CheckCircle size={20} />} />
-          </div>
-
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 relative">
-            
-            <div className="xl:col-span-1 space-y-6">
-              
-              <div className="bg-[#1e293b] rounded-xl border border-slate-700 overflow-hidden shadow-sm">
-                <div className="px-5 py-4 border-b border-slate-700/50 flex items-center justify-between bg-[#0f172a]/50">
-                  <h2 className="text-sm font-semibold text-slate-100 flex items-center gap-2 tracking-wide">
-                    <SlidersHorizontal size={16} className="text-blue-400" />
-                    INFLUENT PARAMETERS
-                  </h2>
+          <div className="xl:w-1/4 space-y-6 xl:sticky xl:top-24 xl:h-[calc(100vh-8rem)] overflow-y-auto pr-2 custom-scrollbar">
+             
+             <Panel title="SIMULATION SCENARIOS" icon={<Activity />}>
+                <div className="grid grid-cols-1 gap-2">
+                   {DEMO_STEPS.map(s => (
+                     <button key={s} onClick={() => { setIsAutoDemo(false); runScenario(s); }} className={`text-left px-3 py-2 text-xs font-semibold rounded border ${activeScenarioName === s && !isAutoDemo ? 'bg-blue-500/20 border-blue-500 text-blue-300' : 'bg-[#0f172a] border-slate-700 text-slate-400 hover:border-slate-500'}`}>
+                        {s.toUpperCase()}
+                     </button>
+                   ))}
                 </div>
+             </Panel>
+
+             <Panel title="INFLUENT SENSOR 1" icon={<SlidersHorizontal />}>
+                <RangeSlider label="pH Level" name="pH" value={sensors.pH} min={0} max={14} step={0.1} normalRange={[6.5, 8.5]} color="text-emerald-400" onChange={handleSensorChange} />
+                <RangeSlider label="TDS (ppm)" name="tds" value={sensors.tds} min={0} max={1500} step={10} normalRange={[0, 500]} color="text-blue-400" onChange={handleSensorChange} />
+                <RangeSlider label="Turbidity (NTU)" name="turbidity" value={sensors.turbidity} min={0} max={100} step={1} normalRange={[0, 10]} color="text-amber-400" onChange={handleSensorChange} />
+             </Panel>
+
+             <Panel title="EDGE ROUTING DECISIONS" icon={<Cpu />}>
+                <p className="text-[10px] text-slate-500 mb-3 uppercase tracking-wider">Configurable Prototype Thresholds</p>
+                <div className="space-y-2">
+                   <LogicRow name="Coagulation/Sediment" active={activeModules.sediment} condition="Turbidity > 10 NTU" />
+                   <LogicRow name="Carbon Adsorption" active={activeModules.carbon} condition="TDS > 500 ppm" />
+                   <LogicRow name="Membrane / RO" active={activeModules.membrane} condition="TDS > 500 ppm" />
+                   <LogicRow name="pH Correction" active={activeModules.phCorrection} condition="pH < 6.5 OR pH > 8.5" />
+                   <LogicRow name="UV Disinfection" active={true} condition="Final Stage" alwaysOn />
+                </div>
+             </Panel>
+             
+          </div>
+
+          <div className="xl:w-3/4 space-y-6">
+             
+             <div className="bg-[#0f172a] border border-slate-700 rounded-xl p-5 flex flex-col md:flex-row justify-between items-center gap-4 shadow-lg">
+                <div>
+                   <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                     <span className={`w-3 h-3 rounded-full ${isSimulating ? 'bg-emerald-500 animate-pulse' : 'bg-slate-600'}`}></span>
+                     SYSTEM STATUS: {isSimulating ? (isAutoDemo ? 'AUTO DEMO ACTIVE' : 'ADAPTIVE TREATMENT ACTIVE') : 'IDLE'}
+                   </h2>
+                   <p className="text-sm text-slate-400 mt-1">Scenario: <span className="text-blue-400 font-semibold">{activeScenarioName}</span></p>
+                </div>
+                <div className="flex gap-6 text-sm">
+                   <div>
+                     <p className="text-slate-500 uppercase text-[10px] font-bold tracking-wider mb-1">Selected Path</p>
+                     <p className="text-emerald-400 font-semibold">{Object.entries(activeModules).filter(([k,v])=>v).map(([k])=>k).join(' → ')}</p>
+                   </div>
+                   <div>
+                     <p className="text-slate-500 uppercase text-[10px] font-bold tracking-wider mb-1">Final Result</p>
+                     <p className={`font-bold ${verificationStatus==='ACCEPT' ? 'text-emerald-400' : verificationStatus==='RE-TREAT' ? 'text-amber-400' : 'text-rose-500'}`}>{verificationStatus}</p>
+                   </div>
+                </div>
+             </div>
+
+             <div className="h-[600px] w-full bg-[#0b1120] rounded-xl border border-slate-700 relative shadow-inner overflow-hidden">
+                <WaterTreatmentSimulation activeModules={activeModules} sensors={sensors} verificationStatus={verificationStatus} onSelectModule={setSelectedModule} isSimulating={isSimulating} />
                 
-                <div className="p-5 space-y-6">
-                  <RangeSlider label="pH Level" name="pH" value={sensors.pH} min={0} max={14} step={0.1} unit="" normalRange={[6.5, 8.5]} color="text-emerald-400" />
-                  <RangeSlider label="TDS" name="tds" value={sensors.tds} min={0} max={3000} step={10} unit="ppm" normalRange={[0, 500]} color="text-blue-400" />
-                  <RangeSlider label="Turbidity" name="turbidity" value={sensors.turbidity} min={0} max={100} step={1} unit="NTU" normalRange={[0, 10]} color="text-amber-400" />
-                  <RangeSlider label="Temperature" name="temp" value={sensors.temp} min={0} max={50} step={0.5} unit="°C" normalRange={[10, 35]} color="text-rose-400" />
+                {selectedModule && MODULE_SPECS[selectedModule] && (
+                   <div className="absolute top-4 right-4 z-20 w-80 bg-[#0f172a]/95 backdrop-blur border border-blue-500/50 rounded-xl p-5 shadow-2xl">
+                      <div className="flex justify-between items-start mb-3">
+                         <h3 className="font-bold text-slate-100">{MODULE_SPECS[selectedModule].title}</h3>
+                         <button onClick={() => setSelectedModule(null)} className="text-slate-400 hover:text-white"><Square size={14}/></button>
+                      </div>
+                      <div className="space-y-3">
+                         <div className="bg-slate-800/50 p-2 rounded border border-slate-700">
+                           <p className="text-[10px] text-blue-400 font-bold uppercase mb-1">Why was this selected?</p>
+                           <p className="text-xs text-slate-300">{getReasonForModule(selectedModule)}</p>
+                           <p className="text-xs text-emerald-400 font-bold mt-1 uppercase text-[10px]">{activeModules[selectedModule] ? 'Action: Module Activated' : 'Action: Module Bypassed'}</p>
+                         </div>
+                         <div>
+                            <p className="text-[10px] text-slate-500 font-bold uppercase mb-1">Purpose</p>
+                            <p className="text-xs text-slate-300">{MODULE_SPECS[selectedModule].purpose}</p>
+                         </div>
+                      </div>
+                   </div>
+                )}
+             </div>
+
+             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                
+                <Panel title="POST-TREATMENT VERIFICATION" icon={<ShieldCheck />}>
+                   <div className="grid grid-cols-2 gap-3 mb-4">
+                      <MetricBox label="pH" value={sensor2.pH.toFixed(1)} isWarning={sensor2.pH < 6.5 || sensor2.pH > 8.5} />
+                      <MetricBox label="TDS (ppm)" value={sensor2.tds.toFixed(0)} isWarning={sensor2.tds > 500} />
+                      <MetricBox label="Turbidity (NTU)" value={sensor2.turbidity.toFixed(1)} isWarning={sensor2.turbidity > 10} />
+                      <MetricBox label="Temp (°C)" value={sensor2.temp.toFixed(1)} />
+                   </div>
+                   <div className={`p-3 rounded border ${verificationStatus==='ACCEPT' ? 'bg-emerald-500/10 border-emerald-500/30' : verificationStatus==='RE-TREAT' ? 'bg-amber-500/10 border-amber-500/30' : 'bg-rose-500/10 border-rose-500/50'}`}>
+                      <p className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Verification Result</p>
+                      {verificationStatus === 'ACCEPT' && <p className="text-emerald-400 font-bold text-sm">✓ WITHIN CONFIGURED LIMITS</p>}
+                      {verificationStatus === 'RE-TREAT' && <p className="text-amber-400 font-bold text-sm">⚠ QUALITY FAILED: RE-TREATMENT REQUIRED</p>}
+                      {verificationStatus === 'DIVERT' && <p className="text-rose-500 font-bold text-sm">⛔ DO NOT RELEASE: VERIFICATION FAILED</p>}
+                   </div>
+                </Panel>
+
+                <Panel title="LIVE DECISION LOG" icon={<List />}>
+                   <div className="h-48 overflow-y-auto flex flex-col gap-2 font-mono text-[10px] custom-scrollbar">
+                     {decisionLog.map(log => (
+                       <div key={log.id} className="text-slate-300 border-l-2 border-blue-500/30 pl-2 py-0.5">
+                         <span className="text-slate-500 mr-2">[{log.time}]</span>
+                         <span className={log.msg.includes('FAIL') || log.msg.includes('DIVERT') ? 'text-rose-400' : log.msg.includes('ACCEPT') ? 'text-emerald-400' : ''}>{log.msg}</span>
+                       </div>
+                     ))}
+                   </div>
+                </Panel>
+
+                <Panel title="SYSTEM COMPONENTS" icon={<Settings />}>
+                   <div className="h-48 overflow-y-auto grid grid-cols-1 gap-1 custom-scrollbar pr-2">
+                     <StatusRow name="ESP32 EDGE ENGINE" state="ONLINE" color="text-blue-400" />
+                     <StatusRow name="Sensor Unit 1" state="ONLINE" color="text-blue-400" />
+                     <StatusRow name="Smart Valve Manifold" state="ONLINE" color="text-blue-400" />
+                     <StatusRow name="Main Water Pump" state={isSimulating ? "RUNNING" : "STOPPED"} color={isSimulating ? "text-emerald-400" : "text-slate-500"} />
+                     <StatusRow name="Sedimentation" state={activeModules.sediment ? "ACTIVE" : "BYPASS"} color={activeModules.sediment ? "text-emerald-400" : "text-slate-500"} />
+                     <StatusRow name="Carbon Adsorption" state={activeModules.carbon ? "ACTIVE" : "BYPASS"} color={activeModules.carbon ? "text-emerald-400" : "text-slate-500"} />
+                     <StatusRow name="RO Membrane" state={activeModules.membrane ? "ACTIVE" : "BYPASS"} color={activeModules.membrane ? "text-emerald-400" : "text-slate-500"} />
+                     <StatusRow name="pH Correction" state={activeModules.phCorrection ? "ACTIVE" : "BYPASS"} color={activeModules.phCorrection ? "text-emerald-400" : "text-slate-500"} />
+                     <StatusRow name="UV Disinfection" state="ACTIVE" color="text-emerald-400" />
+                     <StatusRow name="Sensor Unit 2" state="ONLINE" color="text-blue-400" />
+                   </div>
+                </Panel>
+
+                <div className="lg:col-span-3 bg-gradient-to-br from-[#0f172a] to-[#020617] border border-blue-900/50 rounded-xl p-6 shadow-2xl">
+                   <h3 className="text-blue-400 font-bold tracking-widest text-sm mb-4">WHY IS THIS SYSTEM DIFFERENT?</h3>
+                   <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
+                      <NoveltyPoint num="1" title="ADAPTIVE" text="Treatment pathway changes automatically according to measured water quality." />
+                      <NoveltyPoint num="2" title="MODULAR" text="Treatment modules can be hot-swapped and configured according to local requirements." />
+                      <NoveltyPoint num="3" title="CLOSED-LOOP" text="Treated water is re-sensed and verified before final release." />
+                      <NoveltyPoint num="4" title="FAIL-SAFE" text="Failed water is re-treated or diverted instead of being released to the public." />
+                   </div>
+                   <div className="border-t border-slate-800 pt-4 text-center">
+                     <p className="text-slate-300 italic text-sm max-w-4xl mx-auto">"The novelty is not simply using multiple filters; it is intelligently orchestrating modular treatment through sensor-based routing and post-treatment verification."</p>
+                     <p className="text-slate-500 text-[10px] mt-4 font-mono uppercase">Note: PASS = Within Configured Prototype Criteria. Real deployment requires laboratory calibration and validation.</p>
+                   </div>
                 </div>
-              </div>
 
-              <div className="bg-[#1e293b] rounded-xl border border-slate-700 overflow-hidden shadow-sm">
-                <div className="px-5 py-4 border-b border-slate-700/50 flex items-center justify-between bg-[#0f172a]/50">
-                  <h2 className="text-sm font-semibold text-slate-100 flex items-center gap-2 tracking-wide">
-                    <Cpu size={16} className="text-indigo-400" />
-                    EDGE ROUTING DECISIONS
-                  </h2>
-                </div>
-                <div className="p-5 space-y-1">
-                  <LogicRow name="Coagulation & Sedimentation" active={activeModules.sediment} condition="Turbidity > 10 NTU" />
-                  <LogicRow name="Activated Carbon Adsorption" active={activeModules.carbon} condition="TDS > 500 ppm" />
-                  <LogicRow name="Membrane / Reverse Osmosis" active={activeModules.membrane} condition="TDS > 500 ppm" />
-                  <LogicRow name="Chemical pH Correction" active={activeModules.phCorrection} condition="pH < 6.5 or pH > 8.5" />
-                  <LogicRow name="UV Disinfection Stage" active={activeModules.disinfection} condition="Always Active" alwaysOn />
-                </div>
-              </div>
-
-            </div>
-
-            <div className="xl:col-span-2 flex flex-col h-[600px] xl:h-auto min-h-[600px] bg-[#0f172a] rounded-xl border border-slate-700 overflow-hidden relative shadow-inner">
-              
-              <div className="absolute top-4 left-4 z-10 flex gap-2">
-                 <div className="bg-[#0b1120]/80 backdrop-blur-md px-3 py-1.5 rounded-md border border-slate-700/50 flex items-center gap-2 shadow-lg cursor-pointer">
-                   <div className={`w-2 h-2 rounded-full ${isSimulating ? 'bg-green-500 animate-pulse' : 'bg-slate-500'}`}></div>
-                   <span className="text-xs font-semibold text-slate-200 tracking-wider">LIVE DIGITAL TWIN (CLICK MODULES)</span>
-                 </div>
-              </div>
-
-              {/* Module Details Pop-up Overlay */}
-              {selectedModule && MODULE_SPECS[selectedModule] && (
-                 <div className="absolute top-4 right-4 z-20 w-80 bg-[#1e293b]/95 backdrop-blur-lg border border-blue-500/50 rounded-xl shadow-2xl p-5 transform transition-all animate-in fade-in slide-in-from-right-8">
-                    <div className="flex justify-between items-start mb-3">
-                       <h3 className="font-bold text-slate-100">{MODULE_SPECS[selectedModule].title}</h3>
-                       <button onClick={() => setSelectedModule(null)} className="text-slate-400 hover:text-white bg-slate-800 rounded p-1">
-                          <X size={14} />
-                       </button>
-                    </div>
-                    
-                    <div className="space-y-4">
-                       <div>
-                          <p className="text-xs text-blue-400 font-semibold uppercase tracking-wider mb-1 flex items-center gap-1"><Info size={12}/> Purpose</p>
-                          <p className="text-sm text-slate-300 leading-relaxed">{MODULE_SPECS[selectedModule].purpose}</p>
-                       </div>
-                       <div className="bg-[#0f172a] p-3 rounded-lg border border-slate-700/50">
-                          <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider mb-2">Technical Specs</p>
-                          <p className="text-xs text-slate-300 font-mono leading-loose">{MODULE_SPECS[selectedModule].spec.split('|').map((s, i) => <span key={i} className="block border-b border-slate-800 last:border-0 pb-1 mb-1">{s.trim()}</span>)}</p>
-                       </div>
-                    </div>
-                 </div>
-              )}
-
-              <div className="flex-1 w-full h-full cursor-move">
-                <WaterTreatmentSimulation activeModules={activeModules} sensors={sensors} outputStatus={outputStatus} onSelectModule={setSelectedModule} isSimulating={isSimulating} />
-              </div>
-              
-              <div className="absolute bottom-4 left-4 right-4 z-10 flex justify-between items-end pointer-events-none">
-                 <div className="bg-[#0b1120]/80 backdrop-blur-md p-3 rounded-lg border border-slate-700/50 pointer-events-auto">
-                    <p className="text-xs text-slate-400 uppercase tracking-wider mb-1">Process Analytics</p>
-                    <div className="flex gap-4">
-                       <div>
-                          <p className="text-xs text-slate-500">Est. Energy Usage</p>
-                          <p className="text-sm font-mono text-slate-200">{isSimulating ? calculateEnergy(activeModules) : '0.00'} kWh</p>
-                       </div>
-                       <div>
-                          <p className="text-xs text-slate-500">Water Recovery</p>
-                          <p className="text-sm font-mono text-slate-200">{isSimulating ? (activeModules.membrane ? '65%' : '98%') : '--'}</p>
-                       </div>
-                    </div>
-                 </div>
-              </div>
-            </div>
-
+             </div>
           </div>
-        </main>
-      </div>
+        </div>
+      </main>
     </div>
   );
 
-  function statusToColor(status) {
-    if (status === 'Idle') return 'text-slate-400 bg-slate-400/10 border-slate-500/20';
-    if (status === 'Active') return 'text-emerald-400 bg-emerald-400/10 border-emerald-500/20';
-    if (status === 'Warning') return 'text-amber-400 bg-amber-400/10 border-amber-500/20';
-    return 'text-rose-400 bg-rose-400/10 border-rose-500/20';
-  }
-
-  function outputToColor(out) {
-    if (out.includes('Acceptable')) return 'text-emerald-400 bg-emerald-400/10 border-emerald-500/20';
-    if (out.includes('Re-treat')) return 'text-amber-400 bg-amber-400/10 border-amber-500/20';
-    return 'text-rose-400 bg-rose-400/10 border-rose-500/20';
-  }
-
-  function calculateEnergy(modules) {
-    let base = 2.5; 
-    if (modules.membrane) base += 8.0; 
-    if (modules.disinfection) base += 1.2; 
-    if (modules.sediment) base += 0.5;
-    if (modules.phCorrection) base += 0.3; 
-    return base.toFixed(2);
-  }
-
-  function NavItem({ icon, label, active }) {
+  function Panel({ title, icon, children }) {
     return (
-      <a href="#" className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
-        active ? 'bg-blue-600 text-white shadow-md shadow-blue-900/20' : 'text-slate-400 hover:text-slate-200 hover:bg-[#1e293b]'
-      }`}>
-        {icon}
-        {label}
-      </a>
-    );
-  }
-
-  function StatCard({ title, value, subtitle, type, icon }) {
-    return (
-      <div className="bg-[#1e293b] p-5 rounded-xl border border-slate-700 shadow-sm flex items-start justify-between">
-        <div>
-          <h3 className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-1">{title}</h3>
-          <div className="flex items-baseline gap-2 mt-2">
-            <span className={`text-xl font-bold ${type ? type.split(' ')[0] : 'text-slate-100'}`}>{value}</span>
-          </div>
-          {subtitle && <p className="text-xs text-slate-500 mt-1">{subtitle}</p>}
+      <div className="bg-[#0f172a] rounded-xl border border-slate-700/80 shadow-md flex flex-col h-full">
+        <div className="px-4 py-3 border-b border-slate-700/50 flex items-center gap-2 bg-[#1e293b]/30">
+          <span className="text-blue-400">{icon}</span>
+          <h2 className="text-xs font-bold text-slate-200 tracking-wider">{title}</h2>
         </div>
-        <div className={`p-2.5 rounded-lg ${type ? type.split(' ').slice(1).join(' ') : 'bg-slate-700/50 text-slate-400'}`}>
-          {icon}
+        <div className="p-4 flex-1">
+          {children}
         </div>
       </div>
     );
   }
 
-  function RangeSlider({ label, name, value, min, max, step, unit, normalRange, color }) {
+  function RangeSlider({ label, name, value, min, max, step, normalRange, color, onChange }) {
     const isNormal = value >= normalRange[0] && value <= normalRange[1];
-    
     return (
-      <div className="group mb-4">
-        <div className="flex justify-between items-end mb-2">
-          <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider">{label}</label>
-          <div className="flex items-center gap-2">
-             {!isNormal && <AlertTriangle size={12} className="text-amber-500" />}
-             <span className={`font-mono text-sm font-bold ${isNormal ? color : 'text-amber-500'}`}>
-               {value.toFixed(step < 1 ? 1 : 0)} <span className="text-slate-500 text-xs ml-0.5">{unit}</span>
-             </span>
-          </div>
+      <div className="mb-4">
+        <div className="flex justify-between items-end mb-1">
+          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{label}</label>
+          <span className={`font-mono text-sm font-bold ${isNormal ? color : 'text-rose-400'}`}>{value}</span>
         </div>
-        
-        <input 
-          type="range" name={name} min={min} max={max} step={step} value={value} 
-          onChange={handleSensorChange} 
-          className={`w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer ${isNormal ? 'accent-blue-500' : 'accent-amber-500'}`} 
-        />
-        
-        <div className="flex justify-between text-[10px] text-slate-500 font-mono mt-1">
-          <span>{min}</span>
-          <span>Normal: {normalRange[0]}-{normalRange[1]}</span>
-          <span>{max}</span>
-        </div>
+        <input type="range" name={name} min={min} max={max} step={step} value={value} onChange={onChange} className={`w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer ${isNormal ? 'accent-blue-500' : 'accent-rose-500'}`} />
       </div>
     );
   }
 
   function LogicRow({ name, active, condition, alwaysOn }) {
     return (
-      <div className={`flex items-center justify-between p-3 rounded-lg border transition-colors ${
-        active ? 'bg-blue-500/10 border-blue-500/30' : 'bg-transparent border-transparent hover:bg-slate-800/50'
-      }`}>
+      <div className={`flex items-center justify-between p-2.5 rounded border transition-colors ${active ? 'bg-blue-500/10 border-blue-500/30' : 'bg-transparent border-transparent hover:bg-slate-800/50'}`}>
         <div>
-          <span className={`text-sm font-medium ${active ? 'text-slate-200' : 'text-slate-500'}`}>{name}</span>
-          <p className="text-[10px] text-slate-500 font-mono mt-0.5">{condition}</p>
+          <span className={`text-xs font-bold ${active ? 'text-slate-200' : 'text-slate-500'}`}>{name}</span>
+          <p className="text-[9px] text-slate-500 font-mono mt-0.5">{condition}</p>
         </div>
-        <div className="flex flex-col items-end gap-1">
-          {active ? (
-            <span className="flex items-center gap-1 text-[10px] font-bold tracking-wider text-blue-400 bg-blue-400/10 px-2 py-0.5 rounded border border-blue-400/20">
-              <Power size={10} /> {alwaysOn ? 'ALWAYS ON' : 'ACTIVE'}
-            </span>
-          ) : (
-            <span className="text-[10px] font-bold tracking-wider text-slate-500 bg-slate-800 px-2 py-0.5 rounded border border-slate-700">
-              BYPASS
-            </span>
-          )}
+        <div>
+          {active ? <span className="text-[9px] font-bold tracking-wider text-blue-400 bg-blue-400/10 px-1.5 py-0.5 rounded border border-blue-400/20">{alwaysOn ? 'ALWAYS ON' : 'ACTIVE'}</span> : <span className="text-[9px] font-bold tracking-wider text-slate-500 bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700">BYPASS</span>}
         </div>
       </div>
     );
+  }
+
+  function MetricBox({ label, value, isWarning }) {
+    return (
+      <div className={`p-2 rounded border ${isWarning ? 'bg-rose-500/10 border-rose-500/30' : 'bg-slate-800/50 border-slate-700'}`}>
+         <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider mb-1">{label}</p>
+         <p className={`font-mono font-bold text-lg ${isWarning ? 'text-rose-400' : 'text-slate-200'}`}>{value}</p>
+      </div>
+    )
+  }
+
+  function StatusRow({ name, state, color }) {
+    return (
+      <div className="flex justify-between items-center py-1.5 border-b border-slate-800 last:border-0">
+        <span className="text-xs text-slate-300 font-medium">{name}</span>
+        <span className={`text-[10px] font-bold uppercase tracking-wider ${color}`}>● {state}</span>
+      </div>
+    )
+  }
+  
+  function NoveltyPoint({ num, title, text }) {
+    return (
+      <div className="bg-[#1e293b]/50 p-4 rounded-lg border border-slate-800">
+         <div className="flex items-center gap-2 mb-2">
+           <span className="bg-blue-500/20 text-blue-400 text-xs font-bold w-6 h-6 flex items-center justify-center rounded-full border border-blue-500/30">{num}</span>
+           <h4 className="font-bold text-slate-200 tracking-wider text-sm">{title}</h4>
+         </div>
+         <p className="text-xs text-slate-400 leading-relaxed">{text}</p>
+      </div>
+    )
   }
 }
 
